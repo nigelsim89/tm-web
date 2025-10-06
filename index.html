@@ -1,63 +1,116 @@
-<!-- Keep your TFJS + TM libs -->
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width" />
+  <title>TM Image — Local Model</title>
+  <style>
+    body { font-family: system-ui, Segoe UI, Roboto, Arial; padding: 16px; }
+    button { padding: 10px 14px; border: 1px solid #ddd; border-radius: 8px; cursor: pointer; }
+    #status { margin: 10px 0; opacity: .85; }
+    #label-container > div { padding: 2px 0; }
+    #controls { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:10px 0; }
+  </style>
+</head>
+<body>
+  <h1>Teachable Machine (Local files)</h1>
 
-<script>
-  // Load from your own repo (no external TM URL)
-  const modelURL = "./model/model.json";
-  const metadataURL = "./model/metadata.json";
+  <div id="controls">
+    <button type="button" onclick="init()">Start webcam</button>
+    <label>or test image:
+      <input id="imgInput" type="file" accept="image/*">
+    </label>
+  </div>
 
-  let model, webcam, labelContainer, maxPredictions;
+  <div id="status"></div>
+  <div id="webcam-container"></div>
+  <div id="label-container"></div>
 
-  const setStatus = (t) => {
-    let el = document.getElementById("status");
-    if (!el) {
-      el = document.createElement("div");
-      el.id = "status";
-      document.body.insertBefore(el, document.getElementById("webcam-container"));
-    }
-    el.textContent = t;
-  };
+  <!-- TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+  <!-- Teachable Machine Image library -->
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
 
-  async function init() {
-    try {
+  <script>
+    // Load from your repo (no external TM URL)
+    const modelURL = "./model/model.json";
+    const metadataURL = "./model/metadata.json";
+
+    let model, webcam, labelContainer, maxPredictions, running = false;
+
+    const setStatus = (t) => {
+      const el = document.getElementById("status");
+      el.textContent = t;
+    };
+
+    async function loadModel() {
+      if (typeof tf === "undefined") {
+        setStatus("Error: TensorFlow.js failed to load (CDN blocked?)");
+        throw new Error("tf missing");
+      }
+      if (!window.tmImage) {
+        setStatus("Error: Teachable Machine library failed to load (CDN blocked?)");
+        throw new Error("tmImage missing");
+      }
       setStatus("Loading model…");
-      model = await tmImage.load(modelURL, metadataURL);
+      model = await tmImage.load(modelURL, metadataURL);   // fetches model/model.json + metadata.json + weights.bin
       maxPredictions = model.getTotalClasses();
-
-      // 224×224 matches your model’s imageSize
-      const flip = true;
-      webcam = new tmImage.Webcam(224, 224, flip);
-      setStatus("Requesting camera permission…");
-      await webcam.setup({ facingMode: "user" });
-      await webcam.play();
-      setStatus("Camera ready. Running predictions…");
-      window.requestAnimationFrame(loop);
-
-      document.getElementById("webcam-container").appendChild(webcam.canvas);
       labelContainer = document.getElementById("label-container");
       labelContainer.innerHTML = "";
-      for (let i = 0; i < maxPredictions; i++) {
-        labelContainer.appendChild(document.createElement("div"));
+      for (let i = 0; i < maxPredictions; i++) labelContainer.appendChild(document.createElement("div"));
+    }
+
+    async function init() {
+      try {
+        if (!model) await loadModel();
+        setStatus("Requesting camera permission…");
+        webcam = new tmImage.Webcam(224, 224, true);
+        await webcam.setup({ facingMode: "user" });
+        await webcam.play();
+        running = true;
+        setStatus("Camera ready. Running predictions…");
+        document.getElementById("webcam-container").innerHTML = "";
+        document.getElementById("webcam-container").appendChild(webcam.canvas);
+        window.requestAnimationFrame(loop);
+      } catch (err) {
+        console.error(err);
+        setStatus("Error: " + (err?.message || String(err)));
       }
-    } catch (err) {
-      console.error(err);
-      setStatus("Error: " + (err?.message || String(err)));
     }
-  }
 
-  async function loop() {
-    webcam.update();
-    await predict();
-    window.requestAnimationFrame(loop);
-  }
-
-  async function predict() {
-    const prediction = await model.predict(webcam.canvas);
-    for (let i = 0; i < maxPredictions; i++) {
-      const p = prediction[i];
-      labelContainer.childNodes[i].textContent =
-        `${p.className}: ${p.probability.toFixed(2)}`;
+    async function loop() {
+      if (!running) return;
+      webcam.update();
+      await predictCanvas(webcam.canvas);
+      window.requestAnimationFrame(loop);
     }
-  }
-</script>
+
+    async function predictCanvas(canvasOrImg) {
+      const prediction = await model.predict(canvasOrImg);
+      for (let i = 0; i < maxPredictions; i++) {
+        const p = prediction[i];
+        labelContainer.childNodes[i].textContent = `${p.className}: ${p.probability.toFixed(2)}`;
+      }
+    }
+
+    // Static image test (works even if webcam blocked)
+    document.getElementById("imgInput").addEventListener("change", async (e) => {
+      try {
+        if (!model) await loadModel();
+        const file = e.target.files[0];
+        if (!file) return;
+        const img = new Image();
+        img.onload = async () => {
+          setStatus("Predicting on static image…");
+          await predictCanvas(img);
+          setStatus("Done.");
+        };
+        img.src = URL.createObjectURL(file);
+      } catch (err) {
+        console.error(err);
+        setStatus("Error: " + (err?.message || String(err)));
+      }
+    });
+  </script>
+</body>
+</html>
